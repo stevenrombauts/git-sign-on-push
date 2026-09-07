@@ -1,0 +1,41 @@
+#!/bin/sh
+#
+# pre-push - sign the commits about to be pushed, then refuse the push.
+#
+# Git works out which commits to send before it runs this hook, so if we rewrote
+# the branch and let the push continue git would send the old unsigned commits
+# and the local branch would silently end up ahead of the remote. Refusing means
+# you push again and the second push sends the signed commits.
+#
+# `git up` / `git upup` sign first, so this hook finds nothing to do there.
+
+set -u
+
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+
+TMP=$(mktemp) || exit 1
+trap 'rm -f "$TMP"' EXIT INT TERM
+cat >"$TMP"
+
+"$DIR/sign-unpushed" --hook "$@" <"$TMP"
+rc=$?
+
+if [ "$rc" -eq 10 ]; then
+	echo "pre-push: commits were signed. Run your push again to send them." >&2
+	exit 1
+fi
+[ "$rc" -eq 0 ] || exit "$rc"
+
+# A global core.hooksPath disables .git/hooks in every repo, so hand over to the
+# repo's own pre-push hook if it has one. Skipped for a per-repo install, where
+# that file is this script.
+CHAIN="$(git rev-parse --git-common-dir)/hooks/pre-push"
+if [ -x "$CHAIN" ]; then
+	CHAIN_DIR=$(CDPATH= cd -- "$(dirname -- "$CHAIN")" && pwd -P)
+	if [ "$CHAIN_DIR" != "$DIR" ]; then
+		"$CHAIN" "$@" <"$TMP"
+		exit $?
+	fi
+fi
+
+exit 0

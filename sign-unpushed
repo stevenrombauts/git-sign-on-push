@@ -1,0 +1,149 @@
+#!/bin/sh
+#
+# sign-unpushed - GPG-sign the commits that are about to be pushed.
+#
+# Usage:
+#   sign-unpushed --hook   reads "<local_ref> <local_sha> <remote_ref> <remote_sha>"
+#                          lines on stdin (what git feeds a pre-push hook)
+#   sign-unpushed          no args: works out that line itself for the current branch
+#
+# Exit codes: 0 nothing to do, 10 signed something, 1 failure.
+#
+# Commits are rebuilt with git commit-tree -S, so the index and working tree are
+# never touched and author/committer names, emails and dates are preserved.
+# The SHAs change - the signature lives inside the commit object.
+
+set -u
+
+ZEROS=0000000000000000000000000000000000000000
+
+MAP=$(mktemp) || exit 1
+STDIN_BUF=
+trap 'rm -f "$MAP" "$STDIN_BUF"' EXIT INT TERM
+
+SIGNED=0
+MYEMAIL=$(git config --get user.email || true)
+
+# old sha -> new sha, shared across every ref in one run so a commit that sits on
+# two pushed branches gets signed once.
+map_lookup() {
+	awk -v k="$1" '$1 == k { print $2; exit }' "$MAP"
+}
+
+die() {
+	echo "sign-unpushed: $1" >&2
+	exit 1
+}
+
+sign_ref() {
+	sr_ref=$1
+	sr_local=$2
+	sr_remote=$3
+
+	# all-zero local sha means a branch deletion
+	case "$sr_local" in
+	*[!0]*) ;;
+	*) return 0 ;;
+	esac
+
+	# tags keep signing at creation time via tag.gpgsign; detached HEAD is skipped
+	case "$sr_ref" in
+	refs/heads/*) ;;
+	*) return 0 ;;
+	esac
+
+	case "$sr_remote" in
+	*[!0]*) sr_range="$sr_remote..$sr_local" ;;
+	*) sr_range="$sr_local --not --remotes" ;;
+	esac
+
+	# unquoted on purpose: "--not --remotes" has to split into two arguments
+	# shellcheck disable=SC2086
+	sr_commits=$(git rev-list --reverse --topo-order $sr_range) || return 1
+	[ -n "$sr_commits" ] || return 0
+
+	for c in $sr_commits; do
+		if [ -n "$(map_lookup "$c")" ]; then
+			continue
+		fi
+
+		sr_newparents=
+		sr_pchanged=0
+		for p in $(git log --no-show-signature -1 --format='%P' "$c"); do
+			np=$(map_lookup "$p")
+			if [ -n "$np" ]; then
+				sr_pchanged=1
+			else
+				np=$p
+			fi
+			sr_newparents="$sr_newparents -p $np"
+		done
+
+		sr_sig=$(git log --no-show-signature -1 --format='%G?' "$c")
+		sr_cemail=$(git log --no-show-signature -1 --format='%ce' "$c")
+
+		# leave it alone if nothing below it moved and it is either already
+		# signed or somebody else's commit - never re-sign those with your key
+		if [ "$sr_pchanged" -eq 0 ]; then
+			if [ "$sr_sig" != N ] || [ "$sr_cemail" != "$MYEMAIL" ]; then
+				continue
+			fi
+		fi
+
+		sr_meta=$(git log --no-show-signature -1 --format='%an%n%ae%n%aI%n%cn%n%ce%n%cI' "$c")
+		GIT_AUTHOR_NAME=$(printf '%s\n' "$sr_meta" | sed -n 1p)
+		GIT_AUTHOR_EMAIL=$(printf '%s\n' "$sr_meta" | sed -n 2p)
+		GIT_AUTHOR_DATE=$(printf '%s\n' "$sr_meta" | sed -n 3p)
+		GIT_COMMITTER_NAME=$(printf '%s\n' "$sr_meta" | sed -n 4p)
+		GIT_COMMITTER_EMAIL=$(printf '%s\n' "$sr_meta" | sed -n 5p)
+		GIT_COMMITTER_DATE=$(printf '%s\n' "$sr_meta" | sed -n 6p)
+		export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_AUTHOR_DATE
+		export GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL GIT_COMMITTER_DATE
+
+		sr_tree=$(git rev-parse "$c^{tree}") || return 1
+		# cat-file + sed gives the message exactly as stored; %B would
+		# normalise trailing whitespace
+		# shellcheck disable=SC2086
+		sr_new=$(git cat-file commit "$c" | sed '1,/^$/d' |
+			git commit-tree -S $sr_newparents "$sr_tree")
+		if [ -z "$sr_new" ]; then
+			echo "sign-unpushed: failed to sign $c" >&2
+			return 1
+		fi
+
+		printf '%s %s\n' "$c" "$sr_new" >>"$MAP"
+	done
+
+	sr_tip=$(map_lookup "$sr_local")
+	[ -n "$sr_tip" ] || return 0
+
+	# passing the old value makes this fail instead of clobbering if something
+	# changed underneath. Safe on the checked-out branch: same tree, so the
+	# index and any uncommitted changes stay put.
+	git update-ref -m sign-unpushed "$sr_ref" "$sr_tip" "$sr_local" || return 1
+	echo "sign-unpushed: signed ${sr_ref#refs/heads/} ($(git rev-parse --short "$sr_local") -> $(git rev-parse --short "$sr_tip"))" >&2
+	SIGNED=1
+	return 0
+}
+
+if [ "${1:-}" = "--hook" ]; then
+	# buffer stdin so nothing git runs below can eat it
+	STDIN_BUF=$(mktemp) || exit 1
+	cat >"$STDIN_BUF"
+	while read -r lref lsha rref rsha <&3; do
+		[ -n "$lref" ] || continue
+		sign_ref "$lref" "$lsha" "$rsha" || die "aborted, no refs moved past this point"
+	done 3<"$STDIN_BUF"
+else
+	branch=$(git symbolic-ref -q HEAD) || exit 0
+	name=${branch#refs/heads/}
+	remote=$(git config --get "branch.$name.remote" || true)
+	[ -n "$remote" ] || remote=origin
+	lsha=$(git rev-parse "$branch") || exit 1
+	rsha=$(git rev-parse -q --verify "refs/remotes/$remote/$name" || true)
+	[ -n "$rsha" ] || rsha=$ZEROS
+	sign_ref "$branch" "$lsha" "$rsha" || die "aborted, no refs moved past this point"
+fi
+
+[ "$SIGNED" -eq 0 ] || exit 10
+exit 0

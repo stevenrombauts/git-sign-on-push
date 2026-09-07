@@ -75,8 +75,8 @@ chmod +x ~/.config/git/hooks/sign-unpushed ~/.config/git/hooks/pre-push
 git config --global core.hooksPath ~/.config/git/hooks
 git config --global commit.gpgsign false
 git config --global user.signingkey YOUR_KEY_ID
-git config --global alias.up   '!~/.config/git/hooks/sign-unpushed && git push origin $(git rev-parse --abbrev-ref HEAD)'
-git config --global alias.upup '!~/.config/git/hooks/sign-unpushed && git push origin --force $(git rev-parse --abbrev-ref HEAD)'
+git config --global alias.up   '!f() { ~/.config/git/hooks/sign-unpushed; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 10 ] || exit $rc; git push origin "$(git rev-parse --abbrev-ref HEAD)" "$@"; }; f'
+git config --global alias.upup '!f() { ~/.config/git/hooks/sign-unpushed; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 10 ] || exit $rc; git push --force origin "$(git rev-parse --abbrev-ref HEAD)" "$@"; }; f'
 ```
 
 Three things to know before you do this:
@@ -106,6 +106,8 @@ rm -rf ~/.config/git/hooks
 ## Notes
 
 - `sign-unpushed` can be run on its own; it signs the current branch's unpushed commits and exits
-  `10` if it signed anything, `0` if there was nothing to do.
+  `10` if it signed anything, `0` if there was nothing to do, `1` on failure. Exit `10` is what the
+  `pre-push` hook turns into a refused push, so anything wrapping the script has to treat it as
+  success — that's why the aliases above aren't a plain `&&`.
 - If you're still prompted for your passphrase constantly after this, gpg-agent isn't caching.
   Check `default-cache-ttl` / `max-cache-ttl` in `~/.gnupg/gpg-agent.conf`.

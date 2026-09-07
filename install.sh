@@ -47,8 +47,10 @@ else
 fi
 
 # tag.gpgsign is left alone - tags keep signing at creation time.
-git config --local alias.up '!.git/hooks/sign-unpushed && git push origin $(git rev-parse --abbrev-ref HEAD)'
-git config --local alias.upup '!.git/hooks/sign-unpushed && git push origin --force $(git rev-parse --abbrev-ref HEAD)'
+# sign-unpushed exits 10 when it signed something, which is a success here, so
+# these can't just use "&&".
+git config --local alias.up '!f() { .git/hooks/sign-unpushed; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 10 ] || exit $rc; git push origin "$(git rev-parse --abbrev-ref HEAD)" "$@"; }; f'
+git config --local alias.upup '!f() { .git/hooks/sign-unpushed; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 10 ] || exit $rc; git push --force origin "$(git rev-parse --abbrev-ref HEAD)" "$@"; }; f'
 
 echo "install: hooks in $HOOKS, local config set."
 echo "install: commits are no longer signed at commit time; 'git up' or 'git push' signs them."

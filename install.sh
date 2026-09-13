@@ -22,6 +22,21 @@ if ! git rev-parse --git-dir >/dev/null 2>&1; then
 	exit 1
 fi
 
+# core.hooksPath replaces .git/hooks, it does not add to it. If this repo has one
+# set, anything copied into .git/hooks is dead weight, so stop instead.
+hookspath=$(git config --get core.hooksPath || true)
+if [ -n "$hookspath" ]; then
+	echo "install: this repo reads its hooks from $hookspath (core.hooksPath)." >&2
+	if [ "$force" -eq 0 ]; then
+		echo "install: git ignores .git/hooks here, so installing there would do nothing." >&2
+		echo "install: copy sign-unpushed and pre-push into that directory instead," >&2
+		echo "install: unset core.hooksPath, or run this again with --force." >&2
+		exit 1
+	fi
+	echo "install: --force given, writing to .git/hooks anyway. Git will not run these" >&2
+	echo "install: hooks until core.hooksPath is unset or points at them." >&2
+fi
+
 HOOKS="$(git rev-parse --git-common-dir)/hooks"
 mkdir -p "$HOOKS"
 

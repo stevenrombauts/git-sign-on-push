@@ -62,6 +62,7 @@ sign_ref() {
 	sr_commits=$(git rev-list --reverse --topo-order $sr_range) || return 1
 	[ -n "$sr_commits" ] || return 0
 
+	sr_header=0
 	for c in $sr_commits; do
 		if [ -n "$(map_lookup "$c")" ]; then
 			continue
@@ -90,7 +91,7 @@ sign_ref() {
 			fi
 		fi
 
-		sr_meta=$(git log --no-show-signature -1 --format='%an%n%ae%n%aI%n%cn%n%ce%n%cI' "$c")
+		sr_meta=$(git log --no-show-signature -1 --format='%an%n%ae%n%aI%n%cn%n%ce%n%cI%n%s' "$c")
 		GIT_AUTHOR_NAME=$(printf '%s\n' "$sr_meta" | sed -n 1p)
 		GIT_AUTHOR_EMAIL=$(printf '%s\n' "$sr_meta" | sed -n 2p)
 		GIT_AUTHOR_DATE=$(printf '%s\n' "$sr_meta" | sed -n 3p)
@@ -99,6 +100,13 @@ sign_ref() {
 		GIT_COMMITTER_DATE=$(printf '%s\n' "$sr_meta" | sed -n 6p)
 		export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_AUTHOR_DATE
 		export GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL GIT_COMMITTER_DATE
+
+		if [ "$sr_header" -eq 0 ]; then
+			echo "sign-unpushed: signing ${sr_ref#refs/heads/}:" >&2
+			sr_header=1
+		fi
+		printf '  %.8s  %s  %s\n' "$c" "$GIT_AUTHOR_NAME" \
+			"$(printf '%s\n' "$sr_meta" | sed -n 7p)" >&2
 
 		sr_tree=$(git rev-parse "$c^{tree}") || return 1
 		# cat-file + sed gives the message exactly as stored; %B would

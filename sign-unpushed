@@ -19,7 +19,15 @@ ZEROS=0000000000000000000000000000000000000000
 
 MAP=$(mktemp) || exit 1
 STDIN_BUF=
-trap 'rm -f "$MAP" "$STDIN_BUF"' EXIT INT TERM
+cleanup() { rm -f "$MAP" "$STDIN_BUF"; }
+
+# A trap that only cleans up does not stop the script: on Ctrl-C the temp files
+# would go and the loop below would carry on against a MAP that is no longer
+# there, and every further Ctrl-C would do the same again. The signal traps have
+# to exit. EXIT then runs cleanup a second time, which rm -f does not mind.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 SIGNED=0
 MYEMAIL=$(git config --get user.email || true)
@@ -34,7 +42,14 @@ fi
 
 # old sha -> new sha, shared across every ref in one run so a commit that sits on
 # two pushed branches gets signed once.
+# Fails loudly if the map is unreadable. An empty answer means "not signed yet",
+# so a missing file would otherwise read as "nothing has been signed" and the run
+# would quietly rebuild every commit and then update no ref at all.
 map_lookup() {
+	if [ ! -f "$MAP" ]; then
+		echo "sign-unpushed: commit map $MAP is gone" >&2
+		return 1
+	fi
 	awk -v k="$1" '$1 == k { print $2; exit }' "$MAP"
 }
 
@@ -72,14 +87,15 @@ sign_ref() {
 
 	sr_header=0
 	for c in $sr_commits; do
-		if [ -n "$(map_lookup "$c")" ]; then
+		sr_done=$(map_lookup "$c") || return 1
+		if [ -n "$sr_done" ]; then
 			continue
 		fi
 
 		sr_newparents=
 		sr_pchanged=0
 		for p in $(git log --no-show-signature -1 --format='%P' "$c"); do
-			np=$(map_lookup "$p")
+			np=$(map_lookup "$p") || return 1
 			if [ -n "$np" ]; then
 				sr_pchanged=1
 			else
@@ -131,7 +147,7 @@ sign_ref() {
 		printf '%s %s\n' "$c" "$sr_new" >>"$MAP"
 	done
 
-	sr_tip=$(map_lookup "$sr_local")
+	sr_tip=$(map_lookup "$sr_local") || return 1
 	[ -n "$sr_tip" ] || return 0
 
 	# passing the old value makes this fail instead of clobbering if something

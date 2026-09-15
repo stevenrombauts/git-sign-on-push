@@ -14,7 +14,13 @@ set -u
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 
 TMP=$(mktemp) || exit 1
-trap 'rm -f "$TMP"' EXIT INT TERM
+cleanup() { rm -f "$TMP"; }
+
+# Signal traps exit; a cleanup-only trap would drop $TMP and then let the rest of
+# the script run on with nothing to read from.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 cat >"$TMP"
 
 "$DIR/sign-unpushed" --hook "$@" <"$TMP"

@@ -4,9 +4,9 @@ Sign commits when you push them, not when you make them.
 
 ## What it changes
 
-`commit.gpgsign=true` signs every commit at `git commit` time, including the ones you amend or drop
-in a rebase an hour later. This sets `commit.gpgsign=false` and hands the job to a `pre-push` hook.
-You get one signature per commit that actually leaves the machine.
+`commit.gpgsign=true` signs every commit at `git commit` time, including the ones you amend away or
+drop in a rebase ten minutes later. This sets `commit.gpgsign=false` and moves the work to a
+`pre-push` hook. You get one signature per commit that leaves the machine.
 
 ## What happens when you commit and push
 
@@ -14,9 +14,9 @@ You get one signature per commit that actually leaves the machine.
 flowchart TD
     A["git commit, as often as you like"] --> B["Unsigned commits on your branch"]
     B --> C["git push"]
-    C --> D["pre-push runs sign-unpushed script"]
+    C --> D["pre-push runs sign-unpushed"]
     D --> E["Commits rebuilt with signatures.<br/>New SHAs, branch moved"]
-    E --> F["Pre-push script refuses the push"]
+    E --> F["pre-push refuses the push"]
     F --> G["git push again"]
     G --> H["Signed commits on the remote"]
 ```
@@ -26,12 +26,12 @@ flowchart TD
 ## How the signing works
 
 `sign-unpushed` lists the commits the remote does not have yet and rebuilds each one with
-`git commit-tree -S`. Author and committer names, emails and dates are copied across. Merges are
-kept. Branches you do not have checked out are fine, and so is a dirty working tree, because
-nothing touches the index or your files. `git rebase --gpg-sign` needs a clean tree and a checkout.
+`git commit-tree -S`. Author and committer names, emails and dates are copied across, and merges are
+kept. Branches you do not have checked out are fine, and so is a dirty working tree, because nothing
+touches the index or your files. `git rebase --gpg-sign` needs both a clean tree and a checkout.
 
-Every rebuilt commit gets a new SHA. The signature is stored inside the commit object as a `gpgsig`
-header, so the hash changes with it. Commits that are already on the remote are never touched.
+Every rebuilt commit gets a new SHA. The signature lives inside the commit object as a `gpgsig`
+header, so the hash changes with it. Commits the remote already has are never touched.
 
 Before it signs anything, the script prints what it is about to sign:
 
@@ -88,9 +88,11 @@ local keys:
 The script stops if `.git/hooks/pre-push` already exists with different contents, or if the repo has
 `core.hooksPath` set. `--force` overrides both.
 
+Change the `up` and `upup` aliases to whatever you want. 
+
 ## Install for every repo
 
-Point `core.hooksPath` at one copy of the hooks instead of running `install.sh` per repo:
+Point `core.hooksPath` at one copy of the hooks instead of running `install.sh` per repo. Change the `up` and `upup` aliases to whatever you want:
 
 ```sh
 mkdir -p ~/.config/git/hooks
@@ -104,21 +106,25 @@ git config --global alias.up   '!f() { ~/.config/git/hooks/sign-unpushed; rc=$?;
 git config --global alias.upup '!f() { ~/.config/git/hooks/sign-unpushed; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 10 ] || exit $rc; git push --force origin "$(git rev-parse --abbrev-ref HEAD)" "$@"; }; f'
 ```
 
-Read these four before you run it:
+Read these three before you run it.
 
-- **`core.hooksPath` switches off `.git/hooks` in every repo.** The `pre-push` here covers itself: after signing, it runs
-  `.git/hooks/pre-push` with the same stdin lines when the repo has one. Other hook types
-  (`pre-commit`, `commit-msg`) need the same wrapper, or a symlink from `~/.config/git/hooks/<name>`
-  per repo.
-- **A repo with its own `core.hooksPath` opts out, silently.** Local config beats global, so the
-  signing hook never runs there and nothing reports it. Commits from that repo reach the remote
-  unsigned. husky sets this from version 5 on, and some repos set it by hand. To cover one, point
-  its local `core.hooksPath` at a private directory holding both signing hooks plus a wrapper for
-  the hooks it already had. `install.sh` stops with an error in such a repo instead of writing to
-  `.git/hooks`, which git ignores there. `--force` installs anyway and warns that the hooks stay
-  dormant until `core.hooksPath` is unset or points at them.
-- **Repos that sign as someone else** need `user.signingkey`, or `commit.gpgsign true`, set locally.
-  Local config beats global.
+**`core.hooksPath` switches off `.git/hooks` in every repo.** The `pre-push` here covers itself:
+after signing, it runs `.git/hooks/pre-push` with the same stdin lines when the repo has one. Other
+hook types (`pre-commit`, `commit-msg`) need the same wrapper, or a symlink from
+`~/.config/git/hooks/<name>` per repo.
+
+**A repo with its own `core.hooksPath` opts out, silently.** Local config beats global, so the
+signing hook never runs there and nothing reports it. Commits from that repo reach the remote
+unsigned. husky sets this from version 5 on, and some repos set it by hand. To cover one, point its
+local `core.hooksPath` at a private directory holding both signing hooks plus a wrapper for the
+hooks it already had.
+
+`install.sh` stops with an error in such a repo instead of writing to `.git/hooks`, which git
+ignores there. `--force` installs anyway and warns that the hooks stay dormant until
+`core.hooksPath` is unset or points at them.
+
+**Repos that sign as someone else** need `user.signingkey`, or `commit.gpgsign true`, set locally.
+Local config beats global.
 
 ## Remove it from one repo
 
@@ -146,6 +152,14 @@ rm -rf ~/.config/git/hooks
 `10` when it signed something, `0` when there was nothing to do and `1` on failure. `pre-push` turns
 that `10` into a refused push, so anything else wrapping the script has to read it as success. That
 is why the aliases above check the exit code instead of using `&&`.
+
+## If you interrupt it
+
+Ctrl-C exits `130` and `SIGTERM` exits `143`. Neither moves a ref: the branch is updated once, after
+every commit on it has been rebuilt. Push again and the run starts over.
+
+The commit objects built before the interrupt stay in the object store with nothing pointing at
+them. `git gc` drops them. `git fsck --lost-found` lists them if you want to look first.
 
 ## If you still get passphrase prompts
 

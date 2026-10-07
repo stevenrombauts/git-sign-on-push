@@ -75,12 +75,15 @@ sign_ref() {
 	*) return 0 ;;
 	esac
 
+	# --remotes as well as the old remote sha: after a rebase the old tip is no
+	# longer an ancestor, and "$sr_remote..$sr_local" would drag in every commit
+	# main gained since the old base and check each one.
 	case "$sr_remote" in
-	*[!0]*) sr_range="$sr_remote..$sr_local" ;;
+	*[!0]*) sr_range="$sr_local --not $sr_remote --remotes" ;;
 	*) sr_range="$sr_local --not --remotes" ;;
 	esac
 
-	# unquoted on purpose: "--not --remotes" has to split into two arguments
+	# unquoted on purpose: "--not ... --remotes" has to split into separate arguments
 	# shellcheck disable=SC2086
 	sr_commits=$(git rev-list --reverse --topo-order $sr_range) || return 1
 	[ -n "$sr_commits" ] || return 0
@@ -104,15 +107,15 @@ sign_ref() {
 			sr_newparents="$sr_newparents -p $np"
 		done
 
-		sr_sig=$(git log --no-show-signature -1 --format='%G?' "$c")
-		sr_cemail=$(git log --no-show-signature -1 --format='%ce' "$c")
-
-		# leave it alone if nothing below it moved and it is either already
-		# signed or somebody else's commit - never re-sign those with your key
+		# leave it alone if nothing below it moved and it is either somebody
+		# else's commit or already signed - never re-sign those with your key.
+		# Email first: %G? runs the signature verifier, which can go out to a
+		# keyserver for every commit signed with a key you don't have.
 		if [ "$sr_pchanged" -eq 0 ]; then
-			if [ "$sr_sig" != N ] || [ "$sr_cemail" != "$MYEMAIL" ]; then
-				continue
-			fi
+			sr_cemail=$(git log --no-show-signature -1 --format='%ce' "$c")
+			[ "$sr_cemail" = "$MYEMAIL" ] || continue
+			sr_sig=$(git log --no-show-signature -1 --format='%G?' "$c")
+			[ "$sr_sig" = N ] || continue
 		fi
 
 		sr_meta=$(git log --no-show-signature -1 --format='%an%n%ae%n%aI%n%cn%n%ce%n%cI' "$c")

@@ -31,7 +31,9 @@ kept. Branches you do not have checked out are fine, and so is a dirty working t
 touches the index or your files. `git rebase --gpg-sign` needs both a clean tree and a checkout.
 
 Every rebuilt commit gets a new SHA. The signature lives inside the commit object as a `gpgsig`
-header, so the hash changes with it. Commits the remote already has are never touched.
+header, so the hash changes with it. Commits the remote already has are never touched. That holds
+after a rebase too: commits on any remote-tracking branch, like the new ones on `origin/main`, are
+skipped, so only your own rebased commits get checked and signed.
 
 Before it signs anything, the script prints what it is about to sign:
 

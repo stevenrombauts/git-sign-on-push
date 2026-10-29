@@ -78,9 +78,16 @@ sign_ref() {
 	# --remotes as well as the old remote sha: after a rebase the old tip is no
 	# longer an ancestor, and "$sr_remote..$sr_local" would drag in every commit
 	# main gained since the old base and check each one.
+	# On a force push the remote tip may not exist locally (pushed from another
+	# clone, or dropped and pruned here); rev-list would die on it, so leave it
+	# out and rely on --remotes.
+	sr_range="$sr_local --not --remotes"
 	case "$sr_remote" in
-	*[!0]*) sr_range="$sr_local --not $sr_remote --remotes" ;;
-	*) sr_range="$sr_local --not --remotes" ;;
+	*[!0]*)
+		if git cat-file -e "$sr_remote^{commit}" 2>/dev/null; then
+			sr_range="$sr_local --not $sr_remote --remotes"
+		fi
+		;;
 	esac
 
 	# unquoted on purpose: "--not ... --remotes" has to split into separate arguments
